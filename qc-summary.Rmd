@@ -1,0 +1,166 @@
+---
+title: "Ginty lab QC"
+output:
+  html_document:
+    theme: cerulean
+    toc: true
+    toc_depth: 4
+    fig_caption: true
+    fig_width: 8
+    fig_height: 6
+author: "Meeta Mistry"
+date: "04/29/2014"
+---
+
+
+```{r qc-setup}
+library(ggplot2)
+library(reshape)
+library(gplots)
+library(edgeR)
+library(CHBUtils)
+library(grid)
+library(gridExtra)
+library(knitr)
+
+project_summary = "~/remote-sites/project-summary.csv"
+counts_file = "~/remote-sites/htseq-count/combined.counts"
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442",
+"#0072B2", "#D55E00", "#CC79A7")
+summarydata = read.table(project_summary, header=TRUE, sep=",")
+counts = read.table(counts_file, header=TRUE, row.names="id")
+counts = counts[, order(colnames(counts))]
+```
+
+## Per base sequence quality
+All samples tend to have lower quality at the beginning of reads (5' end). This is characteristic of Illumina HiSeq reads and is partially due to lower quality bases that result from the prep process, and it is also partially do do with how the per-base sequence quality is assessed. Regardless, it's not something to worry about you are still above Q30 for all bases which is good quality data.
+
+```{r image1 , fig.align='center', echo=FALSE, fig.cap='Example per base sequence quality figure'}
+require(png)
+img1 <- readPNG("~/R/ginty_neuron//figures//per_base_quality.png")
+grid.raster(img1)
+```
+
+## Sequence duplication level
+A fair amount of sequences are present more than once, which is normally due to PCR amplification. Could also be simple saturation of your library. If saturated it's a measure of the amount of sequencing you might have wasted in your library - that is to say that a high duplication level means that you could have got much the same diversity in your library by doing a whole load less sequencing.
+
+```{r image2 , fig.align='center', echo=FALSE}
+img2 <- readPNG("~/R/ginty_neuron//figures/duplication_levels.png")
+grid.raster(img2)
+```
+
+## Mapped reads and mapping rate
+The mapped reads vary from sample-to-sample, with TrkC_3k having the smallest number of mapped reads (and smallest library). The mapping rate is more informative telling us what proportion of the library is mapped. There appear to be two problematic samples: TrkB1 and TrkB120403 with mapping rates lower than 75%. 
+
+```{r mapped-plot, fig.align='center'}
+ggplot(summarydata, aes(x=Name, y=Mapped)) + 
+    geom_bar(stat="identity") +
+    theme(axis.text.x = element_text(angle = 90)) +
+    ylab("mapped reads") + xlab("")
+```
+
+```{r mapping-rate-plot, fig.align='center'}
+ggplot(summarydata, aes(x=Name, y=Mapping.Rate)) + 
+    geom_bar(stat="identity") +
+    theme(axis.text.x = element_text(angle = 90)) +
+    ylab("mapping rate") + xlab("")
+```
+
+## Summary of FASTQC results
+```{r table-of-findings, results='asis'}
+samplenames <- summarydata$Name
+qc <- c(rep("Good", 3), rep("Kmer content", 2), "Good", rep("Kmer content", 4), "Good", rep("Kmer content", 2),
+        "Good", "Kmer content", rep(c("Kmer content, GC content, Base sequence content"), 2),
+        "Kmer content", "Good", "Kmer content", "Good")
+out <- data.frame(cbind(as.character(samplenames), qc))
+colnames(out) <- c("SampleName", "QC")
+kable(out, format='markdown', row.names=F)
+```
+
+A quick look a the FASTQC results help give some insight on the problematic samples. While many of the samples are affected by kmer content, TrkB1 and TrkB120403 have additional problems maybe indicating some type of possible adaptor contamination which could explain the low mapping rate (example figures below)        
+
+  - per base sequence: peaks are staggered for alomost the entire length of the read (~ 40bp) 
+  - per base GC content: peaks are also staggered corresponding with base bias   
+  
+A solution to remove contaminating sequence is clipping tools; tools such as cutadapt are useful. Always keep the clipped and unclipped sequences for future reference.
+
+
+```{r image3 , fig.align='center', echo=FALSE, fig.width=11}
+img3a <- readPNG("~/R/ginty_neuron//figures/per_base_gc_content.png")
+img3b <- readPNG("~/R/ginty_neuron//figures/per_base_sequence_content.png")
+grid.arrange(rasterGrob(img3a), rasterGrob(img3b), ncol=2)
+```
+
+## Other useful plots
+### Genes detected
+```{r genes-detected-plot, fig.align='center'}
+ggplot(summarydata, aes(x=Name, y=Genes.Detected)) +
+    geom_bar(stat="identity") +
+    theme(axis.text.x = element_text(angle = 90)) + 
+    ylab("genes detected") + xlab("")
+```
+
+### Intragenic rate
+```{r intragenic-rate-plot, fig.align='center'}
+ggplot(summarydata, aes(x=Name, y=1-Intergenic.Rate)) + 
+    geom_bar(stat="identity") +
+    theme(axis.text.x = element_text(angle = 90)) +
+    ylab("intragenic rate") + xlab("")
+```
+
+### GC content
+```{r gccontent-plot, fig.align='center'}
+ggplot(summarydata, aes(x=Name, y=X.GC)) + 
+    geom_bar(stat="identity") +
+    theme(axis.text.x = element_text(angle = 90)) +
+    ylab("gc content") + xlab("")
+```
+
+### Boxplot raw counts
+```{r boxplot-raw, fig.align='center'}
+melted = melt(counts)
+colnames(melted) = c("sample", "count")
+melted$sample = factor(melted$sample)
+melted$sample = reorder(melted$sample, colnames(counts))
+melted$count = log(melted$count)
+ggplot(melted, aes(x=sample, y=count)) + geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### Raw counts heatmap
+Sample Npy2r3 is an obvious outlier, and will be removed from downstream analysis.   
+
+*"One of you pair of samples are 100bp is because they were with another library (other people's) that requires 100bp and it saves waiting time for both library to be sequenced faster rather than each waiting for another same length library."*
+
+```{r heatmap-raw, fig.align='center'}
+heatmap.2(cor(counts), trace="none")
+```
+
+### Normalized counts
+```{r boxplot-normalized, fig.align='center', warning=FALSE}
+y = DGEList(counts=counts)
+y = calcNormFactors(y)
+normalized_counts = cpm(y, normalized.lib.sizes=TRUE)
+melted = melt(normalized_counts)
+colnames(melted) = c("gene", "sample", "count")
+melted$sample = factor(melted$sample)
+melted$sample = reorder(melted$sample, colnames(counts))
+melted$count = log(melted$count)
+ggplot(melted, aes(x=sample, y=count)) + geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+```
+
+```{r mds-plot, fig.width=20, warning=FALSE}
+g1 <- mds(normalized_counts, k=length(colnames(normalized_counts)) - 1)
+g2 <- mds(normalized_counts, condition=factor(qc), k=length(colnames(normalized_counts)) - 1)
+
+grid.arrange(g1, g2, ncol=2)
+```
+
+
+## Top genes
+Some of the top genes here map to ribsomal genes suggesting possible rRNA contamination. For example the first hit ENSMUSG00000064339 maps to [mitochondrially encoded 16S rRNA](http://useast.ensembl.org/Mus_musculus/Gene/Summary?g=ENSMUSG00000064339;r=MT:1094-2675;t=ENSMUST00000082390) in the first sample counts account for more than 10% of reads. It is common for rRNA to remain even after depletion protocols are applied. Their presence is not necessarily detrimental to downstream analysis.
+
+```{r top-count-genes, results='asis', echo=FALSE}
+kable(head(counts[order(-rowSums(counts)),], format="markdown"))
+```
