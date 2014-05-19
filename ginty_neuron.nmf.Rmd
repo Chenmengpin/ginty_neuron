@@ -3,7 +3,6 @@ title: "Ginty lab Neuron RNA-Seq Analysis"
 output:
   html_document:
     theme: cerulean
-    css:  ~/R/custom2.css
     toc: true
     toc_depth: 4
     fig_caption: true
@@ -137,7 +136,7 @@ This clustering remains the same whether we use the full dataset or the filtered
 
 ### PCA of samples based on most variable genes
 The PCA doesn't display any specific clustering of the neurontypes, but does highlight the same two outliers as we have seen before, TrkC1 and TrkC4_2k (the two grey outlier dots).
-```{r pca, warning=FALSE, fig.align='center'}
+```{r pca, warning=FALSE, fig.align='center', fig.height=12, fig.width=12}
 # High variance genes PCA
 PCAplot.eset(var.eset, categories='neurontype', title="", colorpalette = cbPalette)
 ```
@@ -242,9 +241,10 @@ img2 <- readPNG("~/R/ginty_neuron/GintyFull_General_Result/GintyFull_profile_hea
 grid.raster(img2)
 ```
 
-Of the total dataset, 1060 genes are identified as being specific and only seven of which are exclusive to one neurontype. We can read in the results table and extract out gene lists. A heatmap for the Peptidergic nociceptor genes is plotted below to exemplify that these genes also show expression profiles that are specific to these samples.
+### Specific genes
+Of the total dataset, 1060 genes are identified as being specific and only seven of which are exclusive to one neurontype. We can read in the results table and extract out specifc gene lists. From the set of genes, four of these genes are Peptidergic nociceptor genes (BC039771, Trp63, Pdcd4), three are Aβ-RA-LTMR (Gm24339, Ube2i, Nxf1) and one gene for Aβ-Nociceptor (Dtd2). The stripcharts below indicate that these genes don't seem particularly specific.
 
-```{r specond-results, fig.align='center'}
+```{r specond-results, echo=FALSE}
 
 df <- read.delim('GintyFull_General_Result/GintyFull_result_specific_probeset.txt', header=T, sep="\t", as.is=T)
 
@@ -265,19 +265,43 @@ for (n in levels(meta$neurontype)){
    genes <- c(unname(unlist(all$Gene.x[row])), unname(unlist(all$Gene.y[row])))
    neurontypes[n] <- list(genes)
  }
-
-# Plot example heatmap 
-select <- unname(unlist(neurontypes['Peptidergic Nociceptor']))
-heatmap.2(assay(rld)[select,],scale="row", col=heatcolors.2, labRow="", Colv=FALSE, 
-          trace="none", dendrogram="row")
-
 ```
 
-### LTMR gene overlap
-For comparison, to illustrate the overlap across neuron-specific gene lists a Venn diagram is provided for the three LTMR groups.
-```{r imageVenn2 , fig.align='center', echo=FALSE, fig.align='center', message=FALSE}
-img3 <- readPNG("~/R/ginty_neuron/SpeCond_results//LTMR_venn.png")
-grid.raster(img3)
+```{r, specGenes, echo=FALSE, fig.align='center', fig.height=20, fig.width=20, warning=FALSE}
+# Get exclusive genes
+specific <- c(which(df$X..condition.up == 1) , which(df$X..condition.down == 1))
+df.specific <- df$Gene[specific]
+exprs(eset) <- assay(rld)
+color <- brewer.pal(n=7, name="Set3")
+
+
+# stripchart
+# Set up a blank stripchart
+par(las=2, mfrow=c(4,2), mar=c(2,4,2,2), cex=1.5)
+
+for (i in df.specific){
+  	stripchart(
+			exprs(eset)[i,] ~ eset$neurontype,
+			method="jitter", vertical=TRUE,
+			ylab="log2 (expression)", col=NA,
+			xlim=c(0.25,nlevels(eset$neurontype)+0.75),
+			ylim=range(exprs(eset)[i,]),
+			main=fData(eset)[i,],
+      xaxt="n"
+		);
+		# Then draw points for each sample
+		for (n in 1:nlevels(eset$neurontype)) {
+			j <- which(eset$neurontype == levels(eset$neurontype)[n]);
+			stripchart(
+				exprs(eset)[i, j],
+				method="jitter", vertical=TRUE, add=TRUE, at=n,
+				pch=21, cex=1.5, bg=color[n]
+			);
+		}
+}
+plot.new()
+legend("topleft", inset=0, title="Neurontype", legend=levels(pData(eset)$neurontype), fill=color, horiz=FALSE, cex=1.2)
+
 ```
 
 ## Comparison of results between methods
@@ -356,7 +380,7 @@ grid.raster(img7)
 Based on our results, it appears that six metagenes can be used to divide the samples and best allow us to separately classify the different neuron types. The consensus map shows that we can most accurately classify three neuron groups C-LTMR, Peptidergic and Nonpeptidergic (they align well with three basis vectors) but samples for the remaining groups are scattered. 
 
 ### Neuron-specific genes
-We can extract the features (genes) with the most specifciity for each of the metagenes and assign them to the corresponding neurontype based on the consensus map above. Metagene 6 corresponds with *Peptidergic neuron* samples, and so using the features listed we have plotted a heatmap for visualization.
+We can extract the features (genes) with the most specifciity for each of the metagenes and assign them to the corresponding neurontype based on the consensus map above.
 
 ```{r neurongenes, results='asis', echo=FALSE}
 
@@ -369,18 +393,11 @@ for (i in 1:6){
 
 sigout.nmf <- do.call(rbind, lapply(nmf.files, function(x) nrow(x)))
 row.names(sigout.nmf) <- paste("Metagene", 1:6, sep="")
-colnames(sigout.nmf) <- "Number of Features/Genes"
+ntypes <- c(rep("NA", 2), "C-LTMR/A-LTMR",  "Nopeptidergic", "NA", "Peptidergic")
+sigout.nmf <- cbind(sigout.nmf, ntypes)
+colnames(sigout.nmf) <- c("Number of Features/Genes", "Neurontype")
 kable(sigout.nmf, format="markdown")
 
-```
-
-
-```{r heaptmap.nmf, echo=FALSE, fig.align='center'}
-
-# Plot example heatmap 
-select <- row.names(nmf.files[[6]])
-heatmap.2(assay(rld)[select,],scale="row", col=heatcolors.2, labRow="", Colv=FALSE, 
-          trace="none", dendrogram="row")
 ```
 
 
