@@ -136,7 +136,7 @@ This clustering remains the same whether we use the full dataset or the filtered
 
 ### PCA of samples based on most variable genes
 The PCA doesn't display any specific clustering of the neurontypes, but does highlight the same two outliers as we have seen before, TrkC1 and TrkC4_2k (the two grey outlier dots).
-```{r pca, warning=FALSE, fig.align='center', fig.height=12, fig.width=12}
+```{r pca, warning=FALSE, fig.align='center', fig.height=10, fig.width=10}
 # High variance genes PCA
 PCAplot.eset(var.eset, categories='neurontype', title="", colorpalette = cbPalette)
 ```
@@ -167,7 +167,7 @@ We set up the contrasts to assses gene expression changes for each neurontype ag
 
 ```{r deseq2-analysis, fig.align='center'}
 
-# Create list object for teh results 
+# Create list object for the results 
 resultsAll <- vector("list", 7)
 
 # Extract data of specified contrasts; each neuron against everything else
@@ -183,13 +183,15 @@ names(resultsAll) <- resultsNames(dds)[-1]
 # Get significant genes from each comparison
 p.cutoff <- 0.05
 fc <- 2
-sigmat <- sapply(resultsAll, function(x){
-            gene.FDR <- as.logical(abs(x$log2FoldChange) > fc & x$padj < p.cutoff)
-            return(gene.FDR)}, USE.NAMES=F)
-row.names(sigmat) <- row.names(exprs(eset))
+sigmat <- lapply(resultsAll, function(x){
+            getGenes <- data.frame(x[4:39017,])
+            getGenes <- getGenes[which(getGenes$baseMean > 0),]
+            gene.FDR <- row.names(getGenes)[which(abs(getGenes$log2FoldChange) > fc & getGenes$padj < p.cutoff)]
+            return(gene.FDR)})
+
 
 # Plot example heatmap 
-select <- row.names(sigmat)[which(sigmat[,'neurontypePeptidergic.Nociceptor'])]
+select <- sigmat[['neurontypePeptidergic.Nociceptor']]
 heatmap.2(assay(rld)[select,],scale="row", col=heatcolors.2, labRow="", Colv=FALSE, 
           trace="none", dendrogram="row")
 
@@ -198,7 +200,7 @@ heatmap.2(assay(rld)[select,],scale="row", col=heatcolors.2, labRow="", Colv=FAL
 ### Significant genes
 The number of genes in each list vary and there is definitely overlap between the lists. 
 ```{r deseq2-sigtable, results='asis', echo=FALSE, fig.align='center'}
-sigout <- cbind(colnames(sigmat), unname(apply(sigmat, 2, function(x){length(which(x))})))
+sigout <- cbind(names(sigmat), as.numeric(sapply(sigmat, length))) 
 colnames(sigout) <-c("Neurontype", "Number of Significant genes")
 kable(sigout, format="markdown", row.names=F)
 ```
@@ -308,12 +310,12 @@ legend("topleft", inset=0, title="Neurontype", legend=levels(pData(eset)$neuront
 The two methods generate a gene list for each of the neurontypes, with DESeq producing a much larger number of genes. In the table below we report the number of genes identifed by each method and the intersection between the two methods. The intersection might be a good gene list to start with. 
 
 ```{r comparison, results='asis'}
-sigout <- cbind(colnames(sigmat), unname(apply(sigmat, 2, function(x){length(which(x))})))
+sigout <- cbind(colnames(sigmat), as.numeric(sapply(sigmat, length)))
 sigout.specond <- do.call(rbind, lapply(neurontypes, function(x) length(x)))
 
 overlaps <- numeric()
 for (n in 1:nrow(sigout)){  
-  geneset.1 <- row.names(sigmat)[which(sigmat[,n])]
+  geneset.1 <- sigmat[[n]]]
   geneset.2 <- neurontypes[[n]]
   overlaps <- c(overlaps, length(which(geneset.1 %in% geneset.2)))
 }
@@ -369,7 +371,7 @@ img6 <- readPNG("~/R/ginty_neuron/NMF_results/nmf.overfitting_lee.png")
 grid.raster(img6)
 ```
 
-### Final run (r=6; algorithm='lee')
+### Final run
 Using the final parameters, we let the algorithm run with 1000 iterations. From the best fit, a heatmap of the consensus matrix is plotted to see if the consensus blocks obtained correspond to the known cell types. The consensus matrix can be thought of as average connectivity matrix over multiple runs. From a statistical point of view, this gives the empirical probability for each sample pair to be clustered together.
 
 ```{r consensusmap, fig.align='center', echo=FALSE, fig.align='center', message=FALSE, fig.keep='high'}
@@ -393,7 +395,7 @@ for (i in 1:6){
 
 sigout.nmf <- do.call(rbind, lapply(nmf.files, function(x) nrow(x)))
 row.names(sigout.nmf) <- paste("Metagene", 1:6, sep="")
-ntypes <- c(rep("NA", 2), "C-LTMR/A-LTMR",  "Nopeptidergic", "NA", "Peptidergic")
+ntypes <- c(rep("NA", 2), "C-LTMR/A-LTMR",  "Nopeptidergic", "N/A", "Peptidergic")
 sigout.nmf <- cbind(sigout.nmf, ntypes)
 colnames(sigout.nmf) <- c("Number of Features/Genes", "Neurontype")
 kable(sigout.nmf, format="markdown")
