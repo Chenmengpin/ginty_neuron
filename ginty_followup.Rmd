@@ -152,30 +152,31 @@ legend("topleft", inset=0, title="Neurontype", legend=levels(pData(eset)$neuront
   * [Proprioceptor](./DESeq2_results/neurontypeProprioceptor_rpkm)
   
 ```{r getrpkm, echo=FALSE, eval=FALSE}
-# Load annotations
-gtf <- read.delim(file.path(dataDir, 'gencode.v2.annotation.gtf'), sep="\t", header=F, comment="#")
-gtf <- gtf[which(gtf$V3 == "gene"),]
+# Load cufflink files and extract FPKM
+fpkm_samples <- vector("list", nrow(pData(eset)))
 
-# extract ensembl IDs
-ensembl <- apply(gtf, 1, function(x){
-  s <- unlist(strsplit(as.character(x[9]), ";"))[1]
-  id <- unlist(strsplit(s, " ", fixed=T))[2]
-  id <- unlist(strsplit(id, ".", fixed=T))[1]
-  return(id)
-})
+for (f in 1:nrow(pData(eset))){
+  sample <- row.names(pData(eset))[f]
+  file <- read.delim(paste("cufflinks/", sample, sep=""), header=T, as.is=T)
+  file <- file[,c('tracking_id', 'FPKM')]
+  dups <- file$tracking_id[which(duplicated(file$tracking_id))]
+  getSums <- sapply(unique(dups), function(x){
+                sub <- file[which(file$tracking_id == x),]
+                fpkm <- sum(sub$FPKM)
+  }, USE.NAMES=F)
+  dups <-cbind(unique(dups), getSums)
+  colnames(dups) <- names(file)
+  out <- rbind(file[which(file$tracking_id %in% dups == F),], dups)
+  colnames(out) <- c("tracking_id", sample)
+  fpkm_samples[[f]] <- out
+}
 
-# match annotations with count data
-annot <- data.frame("chr"=gtf$V1, "start"=gtf$V4, "stop"=gtf$V5, row.names=ensembl, stringsAsFactors=FALSE)
-annot <- annot[which(rownames(annot) %in% row.names(counts)),]
-m <- match(row.names(annot), row.names(counts))
-count.annot <- counts[m,]
+ordered <- lapply(fpkm_samples, function(x){x[order(x$tracking_id),]})
+merged <- Reduce(function(x, y) cbind(x, y[,2]), ordered)
+row.names(merged) <- merged$tracking_id
+merged <- merged[,-1]
+colnames(merged) <- row.names(pData(eset))
 
-# RPKM
-y = DGEList(counts=count.annot)
-y = calcNormFactors(y)
-cpm_counts = cpm(y, normalized.lib.sizes=TRUE)
-gene.lengths <- annot$stop - annot$start
-rpkm_counts <- rpkm(y, gene.length = gene.lengths)
 ```
 
 
