@@ -1,0 +1,313 @@
+---
+title: "Ginty lab Neuron RNA-Seq Analysis: Follow-up"
+output:
+  html_document:
+    theme: cerulean
+    toc: true
+    toc_depth: 4
+    fig_caption: true
+    fig_width: 8
+    fig_height: 6
+author: "Meeta Mistry"
+
+---
+
+```{r setup, echo=FALSE}
+ 
+# Setup report details
+clientname="Yang Zheng"
+clientemail="zylittlep@gmail.com"
+lablocation="Neurobiology"
+analystname="Meeta Mistry"
+analystemail="mmistry@hsph.harvard.edu"
+```
+
+RNA-Seq analysis for `r clientname` (`r clientemail`) at `r lablocation`. Contact `r analystname` (`r analystemail`) for additional details. Follow up with the client:     
+
+* Evaluate expression patterns of the five marker genes used for FACS sorting to validate specifity
+* Also look at the handful of 'neuron-specific' genes identified through Galaxy analysis
+* Interested in genes only enriched in LTMR populations using Nociceptor populations as background and vice versa. Can we extract gene lists for each
+
+
+## Setup
+
+### Bioconductor and R libraries used
+
+```{r libraries, echo=TRUE}
+loadlibs <- function(){
+library(ggplot2)
+library(gplots)
+library(CHBUtils)
+library(grid)
+library(gridExtra)
+library(Biobase)
+library(genefilter)
+library(RColorBrewer)
+library(edgeR)
+library(DESeq2)
+}
+suppressPackageStartupMessages(loadlibs())
+```
+
+### Get variables
+- get base directory for analyses
+- specify data and results directories
+- specify column headers used in metadata file
+
+```{r directories, echo=TRUE}
+baseDir=getwd()
+dataDir=paste(baseDir, "/data", sep="")
+resultsDir=paste(baseDir, "/results", sep="")
+metaDir=paste(dataDir, "/meta", sep="")
+
+heatcolors.1 <- rev(brewer.pal(6, "YlOrRd"))
+heatcolors.2 <- colorRampPalette(brewer.pal(9, "GnBu"))(100)
+cbPalette <- cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00")
+```
+
+## Load data and annotations
+Source for gtf annotation file found at [GENCODE](http://www.gencodegenes.org/mouse_releases/). Combine data + metadata + feature data into an _eset_ object.
+
+```{r load data, echo=TRUE}
+
+# Load data and metadata
+counts <- read.delim(file.path(dataDir, 'annotated_combined.counts'), sep="\t", row.names=1, header=T, as.is=T)
+meta <- read.delim(file.path(metaDir, 'ginty_neuron.tsv'), sep="\t", row.names=1, header=T)
+
+# extract gene symbols
+symbol <- counts$symbol
+counts <- counts[,which(colnames(counts) != "symbol")]
+
+# extract ensembl IDs
+ensembl <- rownames(counts)
+
+# Remove outlier sample
+outlier <- "Npy2r3"
+meta <- meta[which(row.names(meta) != outlier),]
+counts <- counts[,which(colnames(counts) %in% rownames(meta))]
+
+# match annotations with count data
+annot <- data.frame(symbol, row.names=ensembl, stringsAsFactors=FALSE)
+
+# Create eset object
+eset <- new("ExpressionSet", exprs=as.matrix(counts))
+meta <- meta[colnames(counts),]
+pData(eset) <- meta
+fData(eset) <- annot
+
+```
+
+## Look at marker genes for validation
+The following marker genes were used  in FACS sorting and therefore should show a high degree of specifity. Calcb is the only gene that doesn't quite agree.        
+
+* Mrgprd: Nonpeptidergic
+* Calca, Calcb: Peptidergic
+* Pvalb: Propriocpetor
+* Th: C-LTMR
+
+```{r markergenes, echo=FALSE, fig.align='center', fig.height=20, fig.width=20, warning=FALSE}
+
+# Get exclusive genes
+markers <- c("Mrgprd", "Calca", "Calcb", "Pvalb", "Th")
+color <- brewer.pal(n=7, name="Set3")
+exp <- cpm(exprs(eset))
+
+# stripchart
+# Set up a blank stripchart
+par(las=2, mfrow=c(3,2), mar=c(3,4,3,2), cex=1.5)
+
+for (i in markers){
+    stripchart(
+			exp[which(fData(eset)$symbol %in% i),] ~ eset$neurontype,
+			method="jitter", vertical=TRUE,
+			ylab="Expression (cpm)", col=NA,
+			xlim=c(0.25,nlevels(eset$neurontype)+0.75),
+			ylim=range(exp[which(fData(eset)$symbol %in% i),]),
+			main= i,
+      xaxt="n"
+		);
+		# Then draw points for each sample
+		for (n in 1:nlevels(eset$neurontype)) {
+			j <- which(eset$neurontype == levels(eset$neurontype)[n]);
+			stripchart(
+				exp[which(fData(eset)$symbol %in% i), j],
+				method="jitter", vertical=TRUE, add=TRUE, at=n,
+				pch=21, cex=1.5, bg=color[n]
+			);
+		}
+}
+plot.new()
+legend("topleft", inset=0, title="Neurontype", legend=levels(pData(eset)$neurontype), fill=color, horiz=FALSE, cex=1.2)
+```
+
+## DESeq2 Gene Lists
+
+* Neuron specific gene lists found using DESeq2 (neurontype vs all neuron background) can be downloaded below. For each neurontype the genes are listed by Ensembl ID and RPKM values reported in each sample.
+  * [Aβ.Nociceptor.WDR](./DESeq2_results/neurontypeAβ.Nociceptor..WDR_rpkm)
+  * [Aβ.RA.LTMR](./DESeq2_results/neurontypeAβ.RA.LTMR_rpkm)
+  * [Aδ.LTMR](./DESeq2_results/neurontypeAδ.LTMR_rpkm)
+  * [C.LTMR](./DESeq2_results/neurontypeC.LTMR_rpkm)
+  * [Nonpeptidergic.Nociceptor](./DESeq2_results/neurontypeNonpeptidergic.Nociceptor_rpkm)
+  * [Peptidergic.Nociceptor](./DESeq2_results/neurontypePeptidergic.Nociceptor_rpkm)
+  * [Proprioceptor](./DESeq2_results/neurontypeProprioceptor_rpkm)
+  
+```{r getrpkm, echo=FALSE, eval=FALSE}
+# Load cufflink files and extract FPKM
+fpkm_samples <- vector("list", nrow(pData(eset)))
+
+for (f in 1:nrow(pData(eset))){
+  sample <- row.names(pData(eset))[f]
+  file <- read.delim(paste("cufflinks/", sample, sep=""), header=T, as.is=T)
+  file <- file[,c('tracking_id', 'FPKM')]
+  dups <- file$tracking_id[which(duplicated(file$tracking_id))]
+  getSums <- sapply(unique(dups), function(x){
+                sub <- file[which(file$tracking_id == x),]
+                fpkm <- sum(sub$FPKM)
+  }, USE.NAMES=F)
+  dups <-cbind(unique(dups), getSums)
+  colnames(dups) <- names(file)
+  out <- rbind(file[which(file$tracking_id %in% dups == F),], dups)
+  colnames(out) <- c("tracking_id", sample)
+  fpkm_samples[[f]] <- out
+}
+
+ordered <- lapply(fpkm_samples, function(x){x[order(x$tracking_id),]})
+merged <- Reduce(function(x, y) cbind(x, y[,2]), ordered)
+row.names(merged) <- merged$tracking_id
+merged <- merged[,-1]
+colnames(merged) <- row.names(pData(eset))
+
+```
+
+
+## Galaxy defined neuron-specific expression
+The genes identified by hand from Galaxy data are few; a handful per neurontype. Of these genes the majority overlap with the gene lists generated by DESeq2 (as shown in the table below). The heatmap below illustrates the expression specificity (unit of expression here is once again using cpm).
+```{r neurongenes, fig.align='center', results='asis'}
+
+# Get Galaxy genes
+neuron.genes <- read.delim(file.path(dataDir, 'gene lists/neuron.specific.txt'), header=T, sep="\t", row.names=1)
+
+# Read in previous gene lists and compute overlaps
+file.list <- read.delim("DESeq2_results/resultfiles.txt", header=F, as.is=T)
+overlaps <- as.data.frame(matrix(0, ncol = 3, nrow = 7))
+for (f in 1:nrow(file.list)){
+  file <- file.list[f,1]
+  x <- read.delim(paste("DESeq2_results/", file, "_rpkm", sep=""), header=T, sep="\t", row.names=1)
+  ids <- row.names(x)
+  genes <- fData(eset)[ids,]
+  galaxy.genes <- row.names(neuron.genes)[grep(gsub("neurontype", "", file), neuron.genes$neurontype)]
+  o <- length(which(galaxy.genes %in% genes))
+  overlaps[f,] <- c(gsub("neurontype", "", file), length(galaxy.genes), o)
+}
+
+colnames(overlaps) <- c("Neurontype", "Galaxy genes", "Genes overlapping with DESeq2")
+kable(overlaps, format='markdown')
+
+# get expression data for genes
+select <- match(row.names(neuron.genes), fData(eset)$symbol)
+
+# set colors and genes
+colors <- cbPalette[neuron.genes$neurontype]
+colors <- colors[!is.na(select)]
+select <- select[!is.na(select)]
+
+# plot heatmap
+heatmap.2(exprs(eset)[select,],scale="row", col=heatcolors.2, labRow=fData(eset)$symbol[select], Colv=FALSE, Rowv=FALSE, 
+          RowSideColors=colors, ColSideColors=cbPalette[pData(eset)$neurontype], trace="none", dendrogram="none")
+```
+
+## SpeCond gene lists
+The significant genes identified using SpeCond are available here for download. These lists (Ensemble IDs) can be cross-referenced against DESeq results to obtain overlapping genes between the two methods.      
+
+  * [Aβ.Nociceptor.WDR](./SpeCond_results/Aβ-Nociceptor (WDR)_genes)
+  * [Aβ.RA.LTMR](./SpeCond_results/Aβ-RA-LTMR_genes)
+  * [Aδ.LTMR](./SpeCond_results/Aδ-LTMR_genes)
+  * [C.LTMR](./SpeCond_results/C-LTMR_genes)
+  * [Nonpeptidergic.Nociceptor](./SpeCond_results/Nonpeptidergic Nociceptor_genes)
+  * [Peptidergic.Nociceptor](./SpeCond_results/Peptidergic Nociceptor_genes)
+  * [Proprioceptor](./SpeCond_results/Proprioceptor_genes)
+
+
+
+## Finding LTMR and Nociceptor specific genes
+For each neurontype we can set the contrasts such that comparisons are made against a higher level 'group of neurons' rather than every other neurontype. The two groups under comparison are the LTMR neurontypes and Nociceptors; and each neurontype is compared to the neuron group it's _not_ contained in. Becasue of a lot of zero or extreme values among comparisons the number of NAs is about one third of the genes. Also, because there appears to be small within group variance compared to between group variance there appear to be much higher number of significant genes compared to using all neurons as a background. To narrow down the list, we can apply a more stringent threshold (p <0.01; FC > 4).
+
+
+The gene lists for each neurontype can be found here. Similar to the previous gene list for each neurontype the genes are listed by Ensembl ID and RPKM values reported in each sample.             
+
+  * [Aβ.Nociceptor.WDR](./DESeq2_bgspecific/neurontypeAβ.Nociceptor..WDR.)
+  * [Aβ.RA.LTMR](./DESeq2_bgspecific/neurontypeAβ.RA.LTMR)
+  * [Aδ.LTMR](./DESeq2_bgspecific/neurontypeAδ.LTMR)
+  * [C.LTMR](./DESeq2_bgspecific/neurontypeC.LTMR)
+  * [Nonpeptidergic.Nociceptor](./DESeq2_bgspecific/neurontypeNonpeptidergic.Nociceptor)
+  * [Peptidergic.Nociceptor](./DESeq2_bgspecific/neurontypePeptidergic.Nociceptor)
+
+```{r deseq2-setup, eval=FALSE}
+
+# Remove unwanted samples
+sub.eset <- eset[,which(pData(eset)$neurontype != 'Proprioceptor')]
+pData(sub.eset) <- droplevels(pData(sub.eset))
+
+# Create DESeq2 dataset
+se <-SummarizedExperiment(assays=SimpleList(counts=exprs(sub.eset)), colData=DataFrame(pData(sub.eset)))
+dds <- DESeqDataSet(se=se, design = ~ neurontype)
+dds <- DESeq(dds)
+
+# Create list object for the results 
+resultsAll <- vector("list", 6)
+
+# adding the effects across all neurontypes within a group to create background contrast
+bg.ltmr <- resultsNames(dds)[grep("LTMR", resultsNames(dds))]
+bg.nociceptor <- resultsNames(dds)[grep("Nociceptor", resultsNames(dds))]
+
+# Extract data of specified contrasts with appropriate background
+for (n in 2:length(resultsNames(dds))){
+  r <- resultsNames(dds)[n] 
+  if (r %in% bg.ltmr) contrast <- list(r, c(bg.nociceptor))
+  if (r %in% bg.nociceptor) contrast <- list(r, c(bg.ltmr))
+  res <- results(dds, contrast=contrast, independentFiltering = FALSE)
+  resultsAll[n-1] <- list(res)
+}
+names(resultsAll) <- resultsNames(dds)[-1]
+
+# Get significant genes from each comparison
+p.cutoff <- 0.01
+fc <- 4
+sigmat <- lapply(resultsAll, function(x){
+            getGenes <- data.frame(x[4:39017,])
+            getGenes <- getGenes[which(getGenes$baseMean > 0),]
+            gene.FDR <- row.names(getGenes)[which(abs(getGenes$log2FoldChange) > fc & getGenes$padj < p.cutoff)]
+            return(gene.FDR)})
+
+
+# Plot example heatmap against only background samples 
+select <- sigmat[['neurontypePeptidergic.Nociceptor']]
+samples <- c('neurontypePeptidergic.Nociceptor', bg.ltmr)
+samplenames <- sapply(samples, function(x){
+                grep(gsub("neurontype", "", x), pData(sub.eset)$neurontype)}, USE.NAMES=F)
+heatmap.2(exprs(sub.eset)[select, unlist(samplenames)],scale="row", col=heatcolors.2, labRow="", Colv=FALSE, 
+          trace="none", dendrogram="none")
+
+```
+
+## LTMR and Nociceptor: overlapping genes between neurontypes
+```{r imageVenn , fig.align='center', echo=FALSE, fig.align='center', message=FALSE, fig.width=11}
+require(png)
+img1 <- readPNG("~/R/ginty_neuron/figures/ltmr_overlap.png")
+img2 <- readPNG("~/R/ginty_neuron/figures/nociceptor_overlap.png")
+grid.arrange(rasterGrob(img1), rasterGrob(img2), ncol=2)
+```
+
+
+```{r getrpkm-bg, echo=FALSE, eval=FALSE}
+# Load cufflink files and extract FPKM
+fpkm_samples <- read.delim(file.path(dataDir, 'counts.rpkm'), header=T, sep="\t", row.names=1)
+fpkm_samples <- fpkm_samples[,row.names(pData(sub.eset))]
+
+for (s in 1:length(sigmat)){
+  getprobes <- sigmat[[s]]
+  dat <- fpkm_samples[getprobes,]
+  write.table(dat, file=paste("DESeq2_bgspecific/", names(sigmat)[s], sep=""), sep="\t", quote=F)   
+}
+
+```
