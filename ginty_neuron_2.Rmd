@@ -1,0 +1,216 @@
+---
+title: "Ginty lab Neuron RNA-Seq II"
+output:
+  html_document:
+    theme: cerulean
+    toc: true
+    toc_depth: 4
+    fig_caption: true
+    fig_width: 8
+    fig_height: 6
+author: "Meeta Mistry"
+date: "08/31/2015"
+---
+
+```{r setup, echo=FALSE}
+ 
+# Setup report details
+clientname="Yang Zheng"
+clientemail="zylittlep@gmail.com"
+lablocation="Neurobiology"
+analystname="Meeta Mistry"
+analystemail="mmistry@hsph.harvard.edu"
+```
+
+RNA-Seq analysis for `r clientname` (`r clientemail`) at `r lablocation`. Contact `r analystname` (`r analystemail`) for additional details. Request from client was:     
+
+> We consulted with the bioinformatics core for RNA-seq analysis a while ago. I just got my new RNA-seq data and I'm wondering whether we can re-open the consult and add these samples in for analysis. Additional samples include:
+>
+> * Abeta-RA-LTMR:NPY2R150407, NPY2R150516, NPY2R750820
+> * Abeta-SA1-LTMR: SA1-2, SA1-04080419, SA1-04200521
+
+## Workflow:   
+  * run fastq files through [bcbio](https://bcbio-nextgen.readthedocs.org/en/latest/index.html)
+  * [assess QC](summary/qc-summary.html) 
+  * Correlation structure / clustering
+  * SA1 versus Npy2r comparison
+  
+## Setup
+
+### Bioconductor and R libraries used
+
+```{r libraries, echo=TRUE}
+loadlibs <- function(){
+library(ggplot2)
+library(reshape)
+library(gplots)
+library(DESeq2)
+library(CHBUtils)
+library(Biobase)
+library(RColorBrewer)
+library(pheatmap)
+library(gProfileR)
+source('revigo.R') ## for GO analysis
+}
+suppressPackageStartupMessages(loadlibs())
+```
+
+### Get variables
+- get base directory for analyses
+- specify data and results directories
+- specify column headers used in metadata file
+
+```{r directories, echo=TRUE}
+baseDir=getwd()
+dataDir=paste(baseDir, "/data", sep="")
+resultsDir=paste(baseDir, "/results", sep="")
+metaDir=paste(baseDir, "/meta", sep="")
+
+heatcolors.1 <- rev(brewer.pal(6, "YlOrRd"))
+heatcolors.2 <- colorRampPalette(brewer.pal(9, "GnBu"))(100)
+cbPalette <- cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", 
+                            "#D55E00", "#CC79A7", "#000000")
+```
+
+## Load data
+
+```{r load data}
+# Load data
+counts <- read.delim(file.path(dataDir, 'combined.counts'), sep="\t", row.names=1, header=T)
+cols <-  sapply(colnames(counts), function(x){gsub(".counts", "", x)}, USE.NAMES=F)
+colnames(counts) <- cols
+ann.counts <- read.delim(file.path(dataDir, 'annotated_combined.counts'), sep="\t", row.names=1, header=T)
+
+# Load metadata
+meta <- read.csv(file.path(metaDir, 'ginty_neuron_2.csv'), row.names=1)
+rows <- sapply(rownames(meta), function(x){gsub(".fastq.gz", "", x)}, USE.NAMES=F)
+row.names(meta) <- rows
+
+# Create eset
+eset <- new("ExpressionSet", exprs=as.matrix(counts))
+pData(eset) <- meta
+fData(eset) <- data.frame(GeneSymbol=ann.counts[,'symbol'], row.names=row.names(ann.counts))
+
+```
+
+## Correlation Plots and PCA
+Seems like the samples tend to segregate by neurontype.
+
+```{r, fig.align='center'}
+# Create DESeq2 dataset
+dds <- DESeqDataSetFromMatrix(countData = exprs(eset), colData = pData(eset), design = ~ neurontype )
+dds <- DESeq(dds)
+
+# Visualizing counts transformed by rlog transformation (unbiased)
+norm_rld <- rlog(dds, blind=TRUE)
+
+# Plot PCA
+print(plotPCA(norm_rld, intgroup=c("neurontype")))
+
+# Plot correlation 
+norm_rld <- assay(norm_rld)
+annotation <- data.frame(sampletype=meta[,'neurontype'], row.names=row.names(meta))
+
+pheatmap(cor(norm_rld), color = heatcolors.1, cluster_rows = T, 
+         annotation=annotation, border_color=NA,
+         cluster_cols = T, show_colnames = T, clustering_distance_rows = "euclidean", 
+         clustering_distance_cols = "euclidean", 
+         fontsize = 10, fontsize_row = 10, height=20)
+
+```
+
+## Differentially expressed genes
+Using DESeq to evaluate differential expression between SA1 and Npy2r neuron subtypes, we get a **total of 163 genes identifed as significant.** This based on a somewhat stringent threshold of **p-adjusted < 0.05 and abs(log2FoldChange) > 2.0.** In the volcano plot depicted below, each of the genes are plotted with adusted p-value on the y-axis and log2FC on the x-axis. Purple points indicate those that meet significance criteria specified above.
+
+
+```{r, fig.align='center', warning=FALSE, message=FALSE}
+
+# Extract contrasts
+contrast <- list("neurontypeRA.LTMR" , "neurontypeSA1")
+res <- results(dds, contrast=contrast)
+
+# Set cutoffs
+padj.cutoff <- 0.05
+fc.cutoff <- 2
+
+# Identify significant genes
+res$threshold <- as.logical(res$padj < padj.cutoff & abs(res$log2FoldChange) > fc.cutoff)
+
+# Volcano plots to visualize significant genes
+df <- data.frame(res)
+ggplot(data=df, aes(x=log2FoldChange, y=-log10(padj), colour=threshold)) +
+  scale_color_manual(values = c("grey", "purple")) +
+  xlim(c(-6,6)) +
+  geom_point(alpha=0.75, pch=16) +
+  theme(legend.position = "none",
+        plot.title = element_text(size = rel(1.5)),
+        axis.title = element_text(size = rel(1.5)),
+        axis.text = element_text(size = rel(1.25))) +
+  xlab("log2 fold change") + ylab("-log10 p-value")
+
+```
+
+## Functional Analysis
+We used the 163 genes as input to [gProfileR](http://biit.cs.ut.ee/gprofiler/), a tool that performs statistical enrichment analysis to find over-representation of information like Gene Ontology terms, biological pathways, regulatory DNA elements, human disease gene annotations, and protein-protein interaction networks. From the gprofiler results the significant Gene Ontolgy terms were extracted and some of the top terms are highlighted in the table below. The full results table containing all annotation terms can be found in the Files for Download section.
+
+
+```{r, results='asis'}
+### Get gene names for only significant genes 
+sig <- row.names(res)[which(res$threshold)]
+sig <- unique(sig)
+
+### Functional analysis using gProfiler
+gprofiler_results  <-   gprofiler(query = sig, 
+                                  organism = "mmusculus",
+                                  ordered_query = F, 
+                                  exclude_iea = F, 
+                                  max_p_value = 0.05, 
+                                  max_set_size = 0,
+                                  correction_method = "fdr",
+                                  hier_filtering = "none", 
+                                  domain_size = "annotated",
+                                  custom_bg = "")
+
+allterms <- gprofiler_results$term.id
+go_table <- gprofiler_results[grep('GO:', allterms) ,
+                              c("term.id", "term.name", "p.value", "overlap.size", "precision","recall")]
+kable(head(go_table[order(go_table$p.value),], 10), format='markdown', row.names=F)
+```
+
+The significant GO terms from gProfiler were used as input to [REVIGO](http://revigo.irb.hr/) to visualize the most prominent processes and reduce redundancy of terms. Each rectangle is a single cluster representative, where terms sharing parent term at some level have been grouped together. The representatives are joined into ‘superclusters’ of loosely related terms, visualized with different colors. Size of the text reflect either the p-value, or the frequency of the GO term in the underlying GOA database. 
+
+```{r GO-analysis, echo=FALSE, fig.align='center'}
+
+GOs <- allterms[grep('GO:', allterms)]
+pvals <- gprofiler_results$p.value[grep('GO:', allterms)]
+runRevigo(GOs, pvals)
+```
+
+## Files for download
+
+* [Full count data matrix](./data/combined.counts)
+* [Full FPKM matrix](./data/combined.fpkm)
+* [Full results table from DESeq2](./results/SA1_vs_Npy2r_deseqfull.txt)
+* [FPKM matrix for significant genes](./results/SA1_vs_Npy2r_fpkm.txt)
+* [gProfiler results](./results/SA1_vs_Npy2r_gprofiler.txt)
+
+```{r write-res, eval=FALSE, echo=FALSE}
+
+# Results data
+out <- as.matrix(res)
+out <- out[which(row.names(res) %in% sig.genes),]
+m <- match(row.names(out), row.names(annot))
+out <- cbind(as.character(ann.counts$symbol[m]), out)
+
+# Expression data
+fpkm <- read.delim(file.path(dataDir, 'combined.fpkm'), sep="\t", header=T, row.names=1)
+sub.fpkm <- fpkm[which(row.names(fpkm) %in% sig),]
+m <- match(row.names(sub.fpkm), row.names(ann.counts))
+out <- cbind(as.character(ann.counts$symbol[m]), sub.fpkm)
+
+# gProfiler data
+write.table(gprofiler_results[,c("term.id", "term.name", "term.size", "domain", "overlap.size", "p.value", 
+                                 "precision","recall", "intersection")], 
+                                 file="results/SA1_vs_Npy2r_gprofiler.txt", sep="\t", row.names=F, quote=F)
+```
+
