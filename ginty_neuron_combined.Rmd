@@ -410,4 +410,27 @@ for (m in 1:nrow(sigout)){
 ```
 
 
+```{r channel-cluster, echo=FALSE, eval=FALSE}
+
+# Get gene list 
+genelist <- read.delim("additional info//gene_lists.txt", sep="\t", header=T)
+heatcolors.1 <- colorRampPalette(c("blue", "white", "red"))(6)
+
+channels <- genelist$Gene[which(genelist$Family == "All Channels")]
+select <- row.names(ann.counts)[which(ann.counts$geneSymbol %in% channels)]
+mat <- assay(rld)[select,]
+row.names(mat) <- fData(eset)$GeneSymbol[which(row.names(exprs(eset)) %in% select)]
+
+ordering <- read.delim("additional info//Order of Subtypes for Channel Clustering.txt", header=T, sep="\t", row.names=1)
+annotation <- data.frame(Neurontype=meta[,'neurontype'], row.names=row.names(meta))
+
+pdf('channel_genes_heatmap.pdf', onefile=F, height=18, width=9)
+pheatmap(mat[,row.names(ordering)], color = heatcolors.1, cluster_rows = T, scale="row",
+         annotation=annotation, border_color=NA, annotation_colors=ann_colors,
+         cluster_cols = F, show_colnames = T, clustering_distance_rows = "euclidean", 
+         clustering_distance_cols = "euclidean", fontsize = 9, fontsize_row = 9, height=40)
+dev.off()
+
+```
+
 
