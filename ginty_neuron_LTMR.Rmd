@@ -1,0 +1,184 @@
+---
+title: "Ginty lab: LTMR only analysis"
+output:
+  html_document:
+    theme: cosmo
+    toc: true
+    toc_depth: 4
+    fig_caption: true
+    fig_width: 8
+    fig_height: 6
+author: "Meeta Mistry"
+date: "04/29/2014"
+---
+
+```{r setup, echo=FALSE}
+ 
+# Setup report details
+clientname="Yang Zheng"
+clientemail="zylittlep@gmail.com"
+lablocation="Neurobiology"
+analystname="Meeta Mistry"
+analystemail="mmistry@hsph.harvard.edu"
+```
+
+RNA-Seq analysis for `r clientname` (`r clientemail`) at `r lablocation`. Contact `r analystname` (`r analystemail`) for additional details. Request from client was:     
+
+> Amongst these neurontypes, we can classify into two main groups based on the different developmental lineages. There are the LTMR subtypes which characterized as large diameter neurons, and the remianing three subtypes which are small diameter neurons. We want to look only at the LTMR subtypes and evaluate subtype specific gene expression changes.
+
+## Setup
+
+### Bioconductor and R libraries used
+
+```{r libraries, echo=TRUE}
+loadlibs <- function(){
+library(ggplot2)
+library(reshape)
+library(gplots)
+library(edgeR)
+library(CHBUtils)
+library(grid)
+library(gridExtra)
+library(Biobase)
+library(genefilter)
+library(RColorBrewer)
+library(DESeq2)
+library(ggdendro)
+library(vsn)
+library(pheatmap)
+}
+suppressPackageStartupMessages(loadlibs())
+```
+
+
+### Get variables
+- get base directory for analyses
+- specify data and results directories
+- specify column headers used in metadata file
+
+```{r directories, echo=TRUE}
+baseDir=getwd()
+dataDir=paste(baseDir, "/combined-data-2", sep="")
+resultsDir=paste(baseDir, "/results-combined-data", sep="")
+
+heatcolors.1 <- rev(brewer.pal(6, "YlOrRd"))
+heatcolors.2 <- colorRampPalette(brewer.pal(9, "GnBu"))(100)
+cbPalette <- cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", 
+                            "#D55E00", "#CC79A7", "#000000")
+```
+
+
+## Load data
+Count data is loaded in along with the metadata for each sample. Here we will remove the outlier sample Npy2r3 and all samples that are not of the LTMR type. We will then create an eset object for downstream analysis.
+
+```{r load data}
+# Load data
+counts <- read.delim(file.path(dataDir, 'combined.counts'), sep="\t", row.names=1, header=T)
+ann.counts <- read.delim(file.path(dataDir, 'annotated_combined.counts'), sep="\t", row.names=1, header=T)
+meta <- read.csv(file.path(dataDir, 'project-summary.csv'), row.names=1, header=T)
+row.names(meta) <- gsub("-", ".", row.names(meta))
+meta <- meta[colnames(counts),]
+
+# Keep only LTMR 
+meta <- meta[grep("LTMR", meta$neurontype),]
+
+# Remove outlier sample
+outlier <- "Npy2r3"
+meta <- droplevels(meta[which(row.names(meta) != outlier),])
+meta <- meta[,c('neurontype', 'replicate')]
+meta$samplename <- row.names(meta)
+
+# Subset counts data
+counts <- counts[,which(colnames(counts) %in% rownames(meta))]
+
+# Create eset
+eset <- new("ExpressionSet", exprs=as.matrix(counts))
+pData(eset) <- meta
+fData(eset) <- data.frame(GeneSymbol=ann.counts[,'geneSymbol'], row.names=row.names(ann.counts))
+
+```
+
+
+## DESeq2: Neuron versus All comparison
+We set up the contrasts to assses gene expression changes for each neurontype against all other neurontypes. Significant genes are identfied as **log2 FC > 2 and corrected p-value < 0.05**. 
+
+```{r deseq2-analysis, fig.align='center'}
+
+# Create DESeq2 dataset
+dds <- DESeqDataSetFromMatrix(countData = counts, colData = meta, design = ~ neurontype)
+dds <- DESeq(dds)
+
+# Matrix of pseudocounts for downstream visualization: two methods
+rld <- rlog(dds, blind = TRUE)
+
+# Create list object for the results 
+resultsAll <- vector("list", 5)
+
+# Extract data of specified contrasts; each neuron against everything else
+# Start at 2 because the first element is the intercept
+for (n in 2:length(resultsNames(dds))){
+  contrast <- rep(0, length(resultsNames(dds)))
+  contrast[n] <- 1
+  res <- results(dds, contrast=contrast) # get results for neuron against all samples
+  resultsAll[n-1] <- list(res)
+}
+names(resultsAll) <- resultsNames(dds)[-1]
+
+# Get significant genes from each comparison
+p.cutoff <- 0.05
+fc <- 2
+sigmat <- sapply(resultsAll, function(x){
+            gene.FDR <- as.logical(abs(x$log2FoldChange) > fc & x$padj < p.cutoff)
+            return(gene.FDR)}, USE.NAMES=F)
+row.names(sigmat) <- row.names(exprs(eset))
+colnames(sigmat) <- gsub("neurontype", "", colnames(sigmat))
+
+```
+
+
+
+### Significant genes
+The number of genes in each list vary, with a fairly large number of genes (773 genes) being represented with the C-LTMR subtype. We also have listed the number of those significant genes which only appear for a single neuronal subtype within the LTMR group.
+
+```{r deseq2-sigtable, results='asis', echo=FALSE, fig.align='center'}
+sigout <- cbind(colnames(sigmat), unname(apply(sigmat, 2, function(x){length(which(x))})))
+
+# Get unique genes for each subtype
+unique_num <- numeric()
+unique_genes <- character()
+
+for (m in 1:nrow(sigout)){  
+  geneset.1 <- row.names(sigmat)[which(sigmat[,m])]  
+  
+  for(n in 1:nrow(sigout)){
+     if(n == m) next
+     geneset.2 <- row.names(sigmat)[which(sigmat[,n])]
+     geneset.1 <- geneset.1[which(geneset.1 %in% geneset.2 == FALSE)]
+  }
+  unique_num <- c(unique_num, length(geneset.1))
+  unique_genes <- c(unique_genes, geneset.1)
+}
+
+sigout <- cbind(sigout, unique_num)
+colnames(sigout) <-c("Neurontype", "No. significant genes", "No. of unique genes")
+kable(sigout, format="markdown", row.names=F)
+```
+
+### Subtype specific genes
+```{r heat, echo=FALSE, fig.align='center', fig.height=15}
+
+data <- assay(rld)[unique_genes, ]
+
+ann_col <- data.frame(Neurontype=meta[,'neurontype'], row.names=row.names(meta))
+rowlab <- c(rep("Ab Field-LTMR", 48), rep("Ab RA-LTMR", 91), rep("Ab SA1-LTMR", 173), rep("Ad-LTMR", 127), 
+            rep("C-LTMR", 559))
+ann_row <- data.frame(Neurontype=rowlab, row.names=row.names(data))
+heatcolors.1 <- colorRampPalette(c("blue", "white", "red"))(6)
+
+pheatmap(data[order(ann_row$Neurontype),order(ann_col$Neurontype)], color =heatcolors.1, cluster_rows = F, scale="row",
+         annotation_col=ann_col, border_color=F, cluster_cols = FALSE, show_colnames = T, annotation_row=ann_row,
+         clustering_distance_rows = "euclidean", clustering_distance_cols = "euclidean", fontsize = 9, 
+         show_rownames=F,fontsize_row = 9, height=30)
+
+```
+
